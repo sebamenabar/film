@@ -56,7 +56,7 @@ class FiLMedNet(nn.Module):
                print_verbose_every=float('inf'),
                verbose=True,
                ):
-    super(FiLMedNet, self).__init__()
+    super().__init__()
 
     num_answers = len(vocab['answer_idx_to_token'])
 
@@ -95,8 +95,13 @@ class FiLMedNet(nn.Module):
     module_H = feature_dim[1] // (stem_stride ** stem_num_layers)  # Rough calc: work for main cases
     module_W = feature_dim[2] // (stem_stride ** stem_num_layers)  # Rough calc: work for main cases
     self.coords = coord_map((module_H, module_W))
-    self.default_weight = Variable(torch.ones(1, 1, self.module_dim)).type(torch.cuda.FloatTensor)
-    self.default_bias = Variable(torch.zeros(1, 1, self.module_dim)).type(torch.cuda.FloatTensor)
+    self.coords.requires_grad = False
+    # self.default_weight = Variable(torch.ones(1, 1, self.module_dim)).type(torch.cuda.FloatTensor)
+    # self.default_bias = Variable(torch.zeros(1, 1, self.module_dim)).type(torch.cuda.FloatTensor)
+    self.default_weight = nn.Parameter(torch.ones(1, 1, self.module_dim, dtype=torch.float))
+    self.default_bias = nn.Parameter(torch.zeros(1, 1, self.module_dim, dtype=torch.float))
+    self.default_weight.requires_grad = False
+    self.default_bias.requires_grad = False
 
     # Initialize stem
     stem_feature_dim = feature_dim[0] + self.stem_use_coords * self.num_extra_channels
@@ -170,8 +175,10 @@ class FiLMedNet(nn.Module):
     N, _, H, W = feats.size()
 
     # Propagate up the network from low-to-high numbered blocks
-    module_inputs = Variable(torch.zeros(feats.size()).unsqueeze(1).expand(
-      N, self.num_modules, self.module_dim, H, W)).type(torch.cuda.FloatTensor)
+    # module_inputs = Variable(torch.zeros(feats.size()).unsqueeze(1).expand(
+    #   N, self.num_modules, self.module_dim, H, W)).type(torch.cuda.FloatTensor)
+    module_inputs = torch.zeros(feats.size(), device=x.device).unsqueeze(1).expand(
+      N, self.num_modules, self.module_dim, H, W) # .to(device=x.device)
     module_inputs[:,0] = feats
     for fn_num in range(self.num_modules):
       if self.condition_method == 'concat':
@@ -304,8 +311,9 @@ def coord_map(shape, start=-1, end=1):
   Ranging min-max in the x and y directions, respectively.
   """
   m, n = shape
-  x_coord_row = torch.linspace(start, end, steps=n).type(torch.cuda.FloatTensor)
-  y_coord_row = torch.linspace(start, end, steps=m).type(torch.cuda.FloatTensor)
+  x_coord_row = torch.linspace(start, end, steps=n) # .type(torch.cuda.FloatTensor)
+  y_coord_row = torch.linspace(start, end, steps=m) # .type(torch.cuda.FloatTensor)
   x_coords = x_coord_row.unsqueeze(0).expand(torch.Size((m, n))).unsqueeze(0)
   y_coords = y_coord_row.unsqueeze(1).expand(torch.Size((m, n))).unsqueeze(0)
-  return Variable(torch.cat([x_coords, y_coords], 0))
+  # return Variable(torch.cat([x_coords, y_coords], 0))
+  return nn.Parameter(torch.cat([x_coords, y_coords], 0))

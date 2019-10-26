@@ -6,6 +6,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import json
 import numpy as np
 import h5py
 import torch
@@ -22,9 +23,8 @@ def _dataset_to_tensor(dset, mask=None):
   tensor = torch.LongTensor(arr)
   return tensor
 
-
 class ClevrDataset(Dataset):
-  def __init__(self, question_h5, feature_h5, vocab, mode='prefix',
+  def __init__(self, question_h5, feature_h5, vocab, index, mode='prefix',
                image_h5=None, max_samples=None, question_families=None,
                image_idx_start_from=None):
     mode_choices = ['prefix', 'postfix']
@@ -35,6 +35,9 @@ class ClevrDataset(Dataset):
     self.feature_h5 = feature_h5
     self.mode = mode
     self.max_samples = max_samples
+
+    with open(index, 'r') as f:
+      self.index = json.load(f)
 
     mask = None
     if question_families is not None:
@@ -57,7 +60,8 @@ class ClevrDataset(Dataset):
     if 'question_families' in question_h5:
       self.all_question_families = _dataset_to_tensor(question_h5['question_families'], mask)
     self.all_questions = _dataset_to_tensor(question_h5['questions'], mask)
-    self.all_image_idxs = _dataset_to_tensor(question_h5['image_idxs'], mask)
+    # self.all_image_idxs = _dataset_to_tensor(question_h5['image_idxs'], mask)
+    self.all_image_ids = np.asarray(question_h5['image_ids']).astype('U7')
     self.all_programs = None
     if 'programs' in question_h5:
       self.all_programs = _dataset_to_tensor(question_h5['programs'], mask)
@@ -70,7 +74,7 @@ class ClevrDataset(Dataset):
       question_family = self.all_question_families[index]
     q_type = None if self.all_types is None else self.all_types[index]
     question = self.all_questions[index]
-    image_idx = self.all_image_idxs[index]
+    image_id = self.all_image_ids[index]
     answer = None
     if self.all_answers is not None:
       answer = self.all_answers[index]
@@ -83,8 +87,9 @@ class ClevrDataset(Dataset):
       image = self.image_h5['images'][image_idx]
       image = torch.FloatTensor(np.asarray(image, dtype=np.float32))
 
+    image_idx = self.index[image_id]['index']
     feats = self.feature_h5['features'][image_idx]
-    feats = torch.FloatTensor(np.asarray(feats, dtype=np.float32))
+    feats = torch.from_numpy(feats).to(torch.float32)
 
     program_json = None
     if program_seq is not None:
@@ -118,6 +123,8 @@ class ClevrDataLoader(DataLoader):
       raise ValueError('Must give feature_h5')
     if 'vocab' not in kwargs:
       raise ValueError('Must give vocab')
+    if 'index' not in kwargs:
+      raise ValueError('Must give index')
 
     feature_h5_path = kwargs.pop('feature_h5')
     print('Reading features from', feature_h5_path)
@@ -131,6 +138,7 @@ class ClevrDataLoader(DataLoader):
 
     vocab = kwargs.pop('vocab')
     mode = kwargs.pop('mode', 'prefix')
+    index = kwargs.pop('index')
 
     question_families = kwargs.pop('question_families', None)
     max_samples = kwargs.pop('max_samples', None)
@@ -138,15 +146,16 @@ class ClevrDataLoader(DataLoader):
     image_idx_start_from = kwargs.pop('image_idx_start_from', None)
     print('Reading questions from ', question_h5_path)
     with h5py.File(question_h5_path, 'r') as question_h5:
-      self.dataset = ClevrDataset(question_h5, self.feature_h5, vocab, mode,
+      self.dataset = ClevrDataset(question_h5, self.feature_h5, vocab, index, mode,
                                   image_h5=self.image_h5,
                                   max_samples=max_samples,
                                   question_families=question_families,
                                   image_idx_start_from=image_idx_start_from)
     kwargs['collate_fn'] = clevr_collate
-    super(ClevrDataLoader, self).__init__(self.dataset, **kwargs)
+    super().__init__(self.dataset, **kwargs)
 
   def close(self):
+    print('Closing')
     if self.image_h5 is not None:
       self.image_h5.close()
     if self.feature_h5 is not None:

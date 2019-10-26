@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 
 # Copyright 2017-present, Facebook, Inc.
 # All rights reserved.
@@ -39,6 +39,8 @@ parser.add_argument('--train_question_h5', default='data/train_questions.h5')
 parser.add_argument('--train_features_h5', default='data/train_features.h5')
 parser.add_argument('--val_question_h5', default='data/val_questions.h5')
 parser.add_argument('--val_features_h5', default='data/val_features.h5')
+parser.add_argument('--train_index_json', default='data/train_index.json')
+parser.add_argument('--val_index_json', default='data/val_index.json')
 parser.add_argument('--feature_dim', default='1024,14,14')
 parser.add_argument('--vocab_json', default='data/vocab.json')
 
@@ -144,6 +146,8 @@ parser.add_argument('--record_loss_every', default=1, type=int)
 parser.add_argument('--checkpoint_every', default=10000, type=int)
 parser.add_argument('--time', default=0, type=int)
 
+# 
+parser.add_argument('--device', default='cpu')
 
 def main(args):
   if args.randomize_checkpoint_path == 1:
@@ -178,6 +182,7 @@ def main(args):
     'question_families': question_families,
     'max_samples': args.num_train_samples,
     'num_workers': args.loader_num_workers,
+    'index': args.train_index_json,
   }
   val_loader_kwargs = {
     'question_h5': args.val_question_h5,
@@ -187,6 +192,7 @@ def main(args):
     'question_families': question_families,
     'max_samples': args.num_val_samples,
     'num_workers': args.loader_num_workers,
+    'index': args.val_index_json,
   }
 
   with ClevrDataLoader(**train_loader_kwargs) as train_loader, \
@@ -212,14 +218,14 @@ def train_loop(args, train_loader, val_loader):
   # Set up model
   optim_method = getattr(torch.optim, args.optimizer)
   if args.model_type in ['FiLM', 'PG', 'PG+EE']:
-    program_generator, pg_kwargs = get_program_generator(args)
+    program_generator, pg_kwargs = get_program_generator(vocab, args)
     pg_optimizer = optim_method(program_generator.parameters(),
                                 lr=args.learning_rate,
                                 weight_decay=args.weight_decay)
     print('Here is the conditioning network:')
     print(program_generator)
   if args.model_type in ['FiLM', 'EE', 'PG+EE']:
-    execution_engine, ee_kwargs = get_execution_engine(args)
+    execution_engine, ee_kwargs = get_execution_engine(vocab, args)
     ee_optimizer = optim_method(execution_engine.parameters(),
                                 lr=args.learning_rate,
                                 weight_decay=args.weight_decay)
@@ -236,7 +242,7 @@ def train_loop(args, train_loader, val_loader):
     print('Here is the baseline model')
     print(baseline_model)
     baseline_type = args.model_type
-  loss_fn = torch.nn.CrossEntropyLoss().cuda()
+  loss_fn = torch.nn.CrossEntropyLoss().to(device=args.device)
 
   stats = {
     'train_losses': [], 'train_rewards': [], 'train_losses_ts': [],
@@ -271,9 +277,12 @@ def train_loop(args, train_loader, val_loader):
       questions, _, feats, answers, programs, _ = batch
       if isinstance(questions, list):
         questions = questions[0]
-      questions_var = Variable(questions.cuda())
-      feats_var = Variable(feats.cuda())
-      answers_var = Variable(answers.cuda())
+      questions_var = questions.to(device=args.device)
+      feats_var = feats.to(device=args.device)
+      answers_var = answers.to(device=args.device)
+      # questions_var = Variable(questions.cuda())
+      # feats_var = Variable(feats.cuda())
+      # answers_var = Variable(answers.cuda())
       if programs[0] is not None:
         programs_var = Variable(programs.cuda())
 
@@ -427,8 +436,8 @@ def get_state(m):
   return state
 
 
-def get_program_generator(args):
-  vocab = utils.load_vocab(args.vocab_json)
+def get_program_generator(vocab, args):
+  # vocab = utils.load_vocab(args.vocab_json)
   if args.program_generator_start_from is not None:
     pg, kwargs = utils.load_program_generator(
       args.program_generator_start_from, model_type=args.model_type)
@@ -440,7 +449,7 @@ def get_program_generator(args):
   else:
     kwargs = {
       'encoder_vocab_size': len(vocab['question_token_to_idx']),
-      'decoder_vocab_size': len(vocab['program_token_to_idx']),
+      # 'decoder_vocab_size': len(vocab['program_token_to_idx']),
       'wordvec_dim': args.rnn_wordvec_dim,
       'hidden_dim': args.rnn_hidden_dim,
       'rnn_num_layers': args.rnn_num_layers,
@@ -461,13 +470,13 @@ def get_program_generator(args):
       pg = FiLMGen(**kwargs)
     else:
       pg = Seq2Seq(**kwargs)
-  pg.cuda()
+  pg = pg.to(device=args.device)
   pg.train()
   return pg, kwargs
 
 
-def get_execution_engine(args):
-  vocab = utils.load_vocab(args.vocab_json)
+def get_execution_engine(vocab, args):
+  # vocab = utils.load_vocab(args.vocab_json)
   if args.execution_engine_start_from is not None:
     ee, kwargs = utils.load_execution_engine(
       args.execution_engine_start_from, model_type=args.model_type)
@@ -506,7 +515,7 @@ def get_execution_engine(args):
       ee = FiLMedNet(**kwargs)
     else:
       ee = ModuleNet(**kwargs)
-  ee.cuda()
+  ee = ee.to(device=args.device)
   ee.train()
   return ee, kwargs
 
@@ -589,9 +598,12 @@ def check_accuracy(args, program_generator, execution_engine, baseline_model, lo
     if isinstance(questions, list):
       questions = questions[0]
 
-    questions_var = Variable(questions.cuda(), volatile=True)
-    feats_var = Variable(feats.cuda(), volatile=True)
-    answers_var = Variable(feats.cuda(), volatile=True)
+    questions_var = questions.to(device=args.device)
+    feats_var = feats.to(device=args.device)
+    answers_var = feats.to(device=args.device)
+    # questions_var = Variable(questions.cuda(), volatile=True)
+    # feats_var = Variable(feats.cuda(), volatile=True)
+    # answers_var = Variable(feats.cuda(), volatile=True)
     if programs[0] is not None:
       programs_var = Variable(programs.cuda(), volatile=True)
 
